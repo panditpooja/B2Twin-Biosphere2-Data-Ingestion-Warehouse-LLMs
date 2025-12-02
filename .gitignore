@@ -74,3 +74,10 @@ test_*.py
 *.bak
 *.swp
 .vercel
+
+# Deployment zip files
+*.zip
+
+# RAG database (should be generated, not committed)
+biosphere2_rag.db
+biosphere2_rag.db-journal

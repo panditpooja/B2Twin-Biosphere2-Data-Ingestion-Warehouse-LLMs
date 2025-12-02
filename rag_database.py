@@ -9,6 +9,16 @@ from datetime import datetime
 from typing import List, Dict, Any, Tuple
 import sqlite3
 from pathlib import Path
+import logging
+import sys
+
+# Configure logging to stdout (platform requirement)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
 
 # For embeddings and vector operations
 try:
@@ -18,7 +28,7 @@ try:
     HAS_EMBEDDINGS = True
 except ImportError:
     HAS_EMBEDDINGS = False
-    print("Install required packages: pip install openai sentence-transformers faiss-cpu")
+    logger.warning("Install required packages: pip install openai sentence-transformers faiss-cpu")
 
 class Biosphere2RAGDatabase:
     """
@@ -31,7 +41,17 @@ class Biosphere2RAGDatabase:
     - Multi-modal data integration
     """
     
-    def __init__(self, db_path: str = "biosphere2_rag.db", embedding_model: str = "all-MiniLM-L6-v2"):
+    def __init__(self, db_path: str = None, embedding_model: str = "all-MiniLM-L6-v2"):
+        # Use /app/data for persistent storage (platform requirement)
+        # For local development, use current directory if /app/data doesn't exist
+        if db_path is None:
+            if os.path.exists("/app/data"):
+                data_dir = "/app/data"
+            else:
+                # Local development - use current directory
+                data_dir = "."
+            os.makedirs(data_dir, exist_ok=True)
+            db_path = os.path.join(data_dir, "biosphere2_rag.db")
         self.db_path = db_path
         self.embedding_model_name = embedding_model
         self.embedding_model = None
@@ -79,22 +99,32 @@ class Biosphere2RAGDatabase:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS embeddings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                doc_id TEXT,
+                doc_id TEXT UNIQUE,
                 embedding_vector BLOB,
                 FOREIGN KEY (doc_id) REFERENCES documents (doc_id)
             )
         ''')
         
+        # Check if embeddings table needs UNIQUE constraint (for existing databases)
+        try:
+            cursor.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_embeddings_doc_id 
+                ON embeddings(doc_id)
+            ''')
+        except sqlite3.OperationalError:
+            # Index might already exist, that's fine
+            pass
+        
         self.conn.commit()
-        print(f"[SUCCESS] RAG Database initialized: {self.db_path}")
+        logger.info(f"[SUCCESS] RAG Database initialized: {self.db_path}")
     
     def load_embedding_model(self):
         """Load sentence transformer model for embeddings"""
         try:
             self.embedding_model = SentenceTransformer(self.embedding_model_name)
-            print(f"[SUCCESS] Embedding model loaded: {self.embedding_model_name}")
+            logger.info(f"[SUCCESS] Embedding model loaded: {self.embedding_model_name}")
         except Exception as e:
-            print(f"[ERROR] Error loading embedding model: {e}")
+            logger.error(f"[ERROR] Error loading embedding model: {e}")
             self.embedding_model = None
     
     def create_document_chunks(self, sensor_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -113,14 +143,19 @@ class Biosphere2RAGDatabase:
             # Create different types of chunks for each sensor
             
             # 1. Summary chunk
+            # Determine if this is a temperature sensor
+            is_temperature = 'temp' in sensor_type.lower() or 'tmp' in sensor_type.lower()
+            unit_suffix = "°F" if is_temperature else ""
+            
             summary_chunk = {
                 "doc_id": f"{sensor_type}_summary",
                 "content": f"""
                 {sensor_type.replace('_', ' ').title()} Sensor Summary:
                 - Total readings: {data.get('total_readings', 0)}
                 - Time range: {data.get('time_range', 'Unknown')}
-                - Value range: {data.get('value_stats', {}).get('min', 'N/A')} to {data.get('value_stats', {}).get('max', 'N/A')}
+                - Value range: {data.get('value_stats', {}).get('min', 'N/A')}{unit_suffix} to {data.get('value_stats', {}).get('max', 'N/A')}{unit_suffix}
                 - Sensor type: {sensor_type}
+                - Units: {"Fahrenheit (°F)" if is_temperature else "Sensor units"}
                 """,
                 "metadata": {
                     "sensor_type": sensor_type,
@@ -155,13 +190,17 @@ class Biosphere2RAGDatabase:
             
             # 3. Statistical analysis chunk
             if 'value_stats' in data:
+                is_temperature = 'temp' in sensor_type.lower() or 'tmp' in sensor_type.lower()
+                unit_suffix = "°F" if is_temperature else ""
+                
                 stats_chunk = {
                     "doc_id": f"{sensor_type}_statistics",
                     "content": f"""
                     {sensor_type.replace('_', ' ').title()} Statistical Analysis:
-                    - Minimum value: {data['value_stats'].get('min', 'N/A')}
-                    - Maximum value: {data['value_stats'].get('max', 'N/A')}
-                    - Average value: {data['value_stats'].get('mean', 'N/A')}
+                    - Minimum value: {data['value_stats'].get('min', 'N/A')}{unit_suffix}
+                    - Maximum value: {data['value_stats'].get('max', 'N/A')}{unit_suffix}
+                    - Average value: {data['value_stats'].get('mean', 'N/A')}{unit_suffix}
+                    - Units: {"Fahrenheit (°F)" if is_temperature else "Sensor units"}
                     - Data quality: {'Good' if data.get('total_readings', 0) > 100 else 'Limited'}
                     """,
                     "metadata": {
@@ -198,64 +237,154 @@ class Biosphere2RAGDatabase:
         return chunks
     
     def add_documents(self, chunks: List[Dict[str, Any]]):
-        """Add document chunks to the database"""
+        """Add document chunks to the database with duplicate prevention"""
         cursor = self.conn.cursor()
+        
+        # Check existing embeddings to avoid regenerating (refresh check for each batch)
+        cursor.execute('SELECT doc_id FROM embeddings')
+        existing_embeddings = set(row[0] for row in cursor.fetchall())
+        logger.info(f"[RAG] Found {len(existing_embeddings)} existing embeddings in database")
+        
+        # Also check existing documents
+        cursor.execute('SELECT doc_id FROM documents')
+        existing_docs = set(row[0] for row in cursor.fetchall())
+        logger.info(f"[RAG] Found {len(existing_docs)} existing documents in database")
+        
+        new_docs = 0
+        new_embeddings = 0
+        skipped_embeddings = 0
+        duplicate_attempts = 0
         
         for chunk in chunks:
             try:
-                # Insert document
+                doc_id = chunk['doc_id']
+                
+                # Check if document already exists
+                doc_exists = doc_id in existing_docs
+                
+                # Insert or update document
                 cursor.execute('''
                     INSERT OR REPLACE INTO documents (doc_id, content, metadata)
                     VALUES (?, ?, ?)
                 ''', (
-                    chunk['doc_id'],
+                    doc_id,
                     chunk['content'],
                     json.dumps(chunk['metadata'])
                 ))
                 
-                # Generate embedding if model is available
+                if not doc_exists:
+                    new_docs += 1
+                    existing_docs.add(doc_id)  # Update our set
+                
+                # Generate embedding only if it doesn't exist
                 if self.embedding_model:
-                    embedding = self.embedding_model.encode(chunk['content'])
-                    
-                    # Store embedding
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO embeddings (doc_id, embedding_vector)
-                        VALUES (?, ?)
-                    ''', (
-                        chunk['doc_id'],
-                        embedding.tobytes()
-                    ))
+                    if doc_id not in existing_embeddings:
+                        # Double-check in database (race condition protection)
+                        cursor.execute('SELECT COUNT(*) FROM embeddings WHERE doc_id = ?', (doc_id,))
+                        count = cursor.fetchone()[0]
+                        
+                        if count == 0:
+                            # Safe to create embedding
+                            embedding = self.embedding_model.encode(chunk['content'])
+                            
+                            # Store embedding using INSERT OR IGNORE to prevent duplicates
+                            # This is safer than INSERT OR REPLACE because it won't overwrite existing
+                            try:
+                                cursor.execute('''
+                                    INSERT OR IGNORE INTO embeddings (doc_id, embedding_vector)
+                                    VALUES (?, ?)
+                                ''', (
+                                    doc_id,
+                                    embedding.tobytes()
+                                ))
+                                # Check if row was actually inserted
+                                if cursor.rowcount > 0:
+                                    new_embeddings += 1
+                                    existing_embeddings.add(doc_id)  # Update our set
+                                else:
+                                    # Row was ignored (already exists) - refresh our set
+                                    duplicate_attempts += 1
+                                    logger.debug(f"[RAG] Embedding already exists for {doc_id} (ignored insert)")
+                                    cursor.execute('SELECT doc_id FROM embeddings')
+                                    existing_embeddings = set(row[0] for row in cursor.fetchall())
+                            except sqlite3.IntegrityError as e:
+                                # UNIQUE constraint violation - embedding already exists
+                                duplicate_attempts += 1
+                                logger.warning(f"[RAG] Duplicate embedding prevented for {doc_id}: {e}")
+                                # Refresh existing_embeddings from database
+                                cursor.execute('SELECT doc_id FROM embeddings')
+                                existing_embeddings = set(row[0] for row in cursor.fetchall())
+                        else:
+                            # Embedding exists in database but not in our set (race condition)
+                            duplicate_attempts += 1
+                            logger.debug(f"[RAG] Embedding already exists in DB for {doc_id}, skipping")
+                            existing_embeddings.add(doc_id)
+                    else:
+                        skipped_embeddings += 1
+                        logger.debug(f"[RAG] Embedding already exists for {doc_id}, skipping")
                 
                 self.documents.append(chunk)
                 
             except Exception as e:
-                print(f"[ERROR] Error adding document {chunk['doc_id']}: {e}")
+                logger.error(f"[ERROR] Error adding document {chunk['doc_id']}: {e}")
+                import traceback
+                traceback.print_exc()
         
         self.conn.commit()
-        print(f"[SUCCESS] Added {len(chunks)} documents to RAG database")
+        
+        # Final validation: check for actual duplicates
+        cursor.execute('''
+            SELECT doc_id, COUNT(*) as count 
+            FROM embeddings 
+            GROUP BY doc_id 
+            HAVING COUNT(*) > 1
+        ''')
+        actual_duplicates = cursor.fetchall()
+        
+        if actual_duplicates:
+            logger.warning(f"[WARNING] Found {len(actual_duplicates)} duplicate embeddings after insertion!")
+            for doc_id, count in actual_duplicates[:5]:
+                logger.warning(f"  - {doc_id}: {count} duplicates")
+        
+        logger.info(f"[SUCCESS] Added {len(chunks)} documents to RAG database")
+        logger.info(f"  - New documents: {new_docs}")
+        logger.info(f"  - New embeddings created: {new_embeddings}")
+        logger.info(f"  - Embeddings skipped (already exist): {skipped_embeddings}")
+        if duplicate_attempts > 0:
+            logger.info(f"  - Duplicate attempts prevented: {duplicate_attempts}")
     
     def build_vector_index(self):
         """Build FAISS vector index for similarity search"""
         if not self.embedding_model:
-            print("[ERROR] No embedding model available")
+            logger.error("[ERROR] No embedding model available")
             return
         
         cursor = self.conn.cursor()
-        cursor.execute('SELECT doc_id, embedding_vector FROM embeddings')
+        # Use DISTINCT to avoid duplicate doc_ids (safety check)
+        cursor.execute('SELECT DISTINCT doc_id, embedding_vector FROM embeddings')
         results = cursor.fetchall()
         
         if not results:
-            print("[ERROR] No embeddings found")
+            logger.error("[ERROR] No embeddings found")
             return
         
-        # Extract embeddings
+        # Extract embeddings (deduplicate by doc_id)
         embeddings = []
         doc_ids = []
+        seen_doc_ids = set()
         
         for doc_id, embedding_bytes in results:
-            embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
-            embeddings.append(embedding)
-            doc_ids.append(doc_id)
+            if doc_id not in seen_doc_ids:
+                embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
+                embeddings.append(embedding)
+                doc_ids.append(doc_id)
+                seen_doc_ids.add(doc_id)
+            else:
+                logger.warning(f"Duplicate embedding found for {doc_id}, skipping")
+        
+        if not embeddings:
+            logger.error("[ERROR] No valid embeddings after deduplication")
+            return
         
         # Build FAISS index
         embeddings_array = np.array(embeddings)
@@ -267,7 +396,7 @@ class Biosphere2RAGDatabase:
         # Store doc_ids for retrieval
         self.doc_ids = doc_ids
         
-        print(f"[SUCCESS] Vector index built with {len(embeddings)} embeddings")
+        logger.info(f"[SUCCESS] Vector index built with {len(embeddings)} embeddings (from {len(results)} database entries)")
     
     def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """
@@ -281,7 +410,7 @@ class Biosphere2RAGDatabase:
             List of relevant documents with similarity scores
         """
         if not self.vector_index or not self.embedding_model:
-            print("[ERROR] Vector index or embedding model not available")
+            logger.error("[ERROR] Vector index or embedding model not available")
             return []
         
         # Encode query
@@ -355,14 +484,35 @@ class Biosphere2RAGDatabase:
         cursor.execute('SELECT COUNT(*) FROM embeddings')
         embedding_count = cursor.fetchone()[0]
         
-        # Count sensor readings
-        cursor.execute('SELECT COUNT(*) FROM sensor_readings')
-        reading_count = cursor.fetchone()[0]
+        # Count unique sensor types from document metadata
+        cursor.execute('SELECT DISTINCT json_extract(metadata, "$.sensor_type") FROM documents WHERE json_extract(metadata, "$.sensor_type") IS NOT NULL')
+        sensor_types = cursor.fetchall()
+        sensor_type_count = len([s for s in sensor_types if s[0] is not None and s[0] != ''])
+        
+        # Count total sensor readings from metadata (sum of total_readings from all sensor summaries)
+        total_readings = 0
+        cursor.execute('SELECT metadata FROM documents WHERE json_extract(metadata, "$.chunk_type") = "summary"')
+        summaries = cursor.fetchall()
+        for (metadata_json,) in summaries:
+            try:
+                metadata = json.loads(metadata_json)
+                if 'total_readings' in metadata:
+                    total_readings += int(metadata.get('total_readings', 0))
+            except:
+                pass
+        
+        # If we can't get from metadata, try to count from sensor_readings table
+        if total_readings == 0:
+            cursor.execute('SELECT COUNT(*) FROM sensor_readings')
+            reading_result = cursor.fetchone()
+            if reading_result:
+                total_readings = reading_result[0]
         
         return {
             'documents': doc_count,
             'embeddings': embedding_count,
-            'sensor_readings': reading_count,
+            'sensor_types': sensor_type_count,
+            'total_readings': total_readings,
             'vector_index_size': len(self.doc_ids) if hasattr(self, 'doc_ids') else 0
         }
 

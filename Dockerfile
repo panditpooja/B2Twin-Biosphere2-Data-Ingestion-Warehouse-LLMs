@@ -1,5 +1,5 @@
-# Biosphere 2 Sensor Analysis Web App
-# Docker configuration for Jetstream2 deployment
+# Biosphere 2 RAG Application Dockerfile
+# Compliant with platform deployment requirements
 
 FROM python:3.11-slim
 
@@ -15,29 +15,37 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements_rag.txt .
-RUN pip install --no-cache-dir -r requirements_rag.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application files
-COPY spectacular_rag_web_app.py .
-COPY simple_interface.py .
+# Pre-download embedding model during build (speeds up first startup)
+# This caches the model so it doesn't need to download on first run
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" || echo "Model download will happen at runtime"
+
+# Copy application files (only essential files for deployment)
+COPY main.py .
 COPY rag_database.py .
-COPY data/ ./data/
+COPY simple_interface.py .
+COPY api_data_loader.py .
+
+# Copy static folder for Biosphere 3 logo
 COPY static/ ./static/
 
-# Create necessary directories
-RUN mkdir -p logs
+# Create /app/data directory for persistent storage (platform requirement)
+RUN mkdir -p /app/data
 
 # Set environment variables
-ENV FLASK_APP=spectacular_rag_web_app.py
+ENV FLASK_APP=main.py
 ENV FLASK_ENV=production
+ENV PYTHONUNBUFFERED=1
 
-# Expose port (Render uses $PORT)
-EXPOSE 5000
+# Platform requirement: Expose port 8080
+EXPOSE 8080
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5000/ || exit 1
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/ || exit 1
 
-# Run the application (Render will override with $PORT)
-CMD ["gunicorn", "--bind", "0.0.0.0:${PORT:-5000}", "--workers", "2", "--timeout", "300", "spectacular_rag_web_app:app"]
+# Run the application with gunicorn
+# Platform requirement: App must listen on 0.0.0.0:8080
+CMD gunicorn --bind 0.0.0.0:8080 --workers 2 --timeout 300 --access-logfile - --error-logfile - main:app

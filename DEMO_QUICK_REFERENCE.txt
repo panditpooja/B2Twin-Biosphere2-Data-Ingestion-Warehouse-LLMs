@@ -1,0 +1,97 @@
+================================================================================
+  QUICK REFERENCE: PERFECT QUESTIONS FOR YOUR DEMO
+  Based on your deployed system (342 docs, Sep 9 - Oct 9, 2025)
+================================================================================
+
+🎯 TOP 5 QUESTIONS TO START YOUR DEMO (Copy & Paste Ready):
+
+1. "What trends can you identify across the monitoring period?"
+   → This worked PERFECTLY in your samples! Shows comprehensive analysis.
+
+2. "What is the average temperature?"
+   → Quick answer: 76.99°F. High confidence.
+
+3. "What is the temperature range across all sensors?"
+   → Shows comprehensive temperature coverage.
+
+4. "What is the monitoring period for all sensors?"
+   → Returns: September 9 to October 9, 2025.
+
+5. "What are the temperature statistics?"
+   → Returns min, max, average values.
+
+================================================================================
+
+✅ MORE QUESTIONS THAT WORK GREAT:
+
+Temperature Questions:
+- "What was the highest temperature recorded?"
+- "What was the lowest temperature recorded?"
+- "What temperatures were measured in the monitoring period?"
+
+System Overview:
+- "What is the overall system summary?"
+- "How many readings does each sensor have?"
+- "Which sensor has the most readings?"
+
+Sensor-Specific:
+- "What data is available for the smeter temperature sensor?"
+- "What data is available for the nmeter temperature sensor?"
+- "What is the status of the miscsav1 temperature sensor?"
+
+Statistical:
+- "What are the statistical summaries for all sensors?"
+- "What sensors have the widest value ranges?"
+
+Time-Based (WITHIN Sep 9 - Oct 9):
+- "What data is available from September 9th?"
+- "What data is available from October 9th?"
+- "What happened during the first week of monitoring?"
+
+================================================================================
+
+❌ QUESTIONS TO AVOID:
+
+- "What was the highest temperature on October 11?" (Data only goes to Oct 9)
+- "What was the highest temperature on November 11?" (Outside range)
+- "What was the highest temperature on October 8?" (May not have specific date)
+- "How do valve operations correlate with environmental conditions?" (No valve data)
+- Any questions about dates after October 9, 2025
+
+================================================================================
+
+💡 DEMO FLOW SUGGESTION:
+
+1. OPENING: "What trends can you identify across the monitoring period?"
+   → Shows comprehensive analysis capability
+
+2. PRECISION: "What is the average temperature?"
+   → Quick, accurate answer (76.99°F)
+
+3. RANGE: "What is the temperature range across all sensors?"
+   → Shows comprehensive coverage
+
+4. SYSTEM KNOWLEDGE: "What is the monitoring period for all sensors?"
+   → Shows system awareness
+
+5. STATISTICS: "What are the temperature statistics?"
+   → Shows analytical depth
+
+================================================================================
+
+📋 COPY-PASTE READY QUESTIONS (For Quick Access):
+
+"What trends can you identify across the monitoring period?"
+"What is the average temperature?"
+"What is the temperature range across all sensors?"
+"What is the monitoring period for all sensors?"
+"What are the temperature statistics?"
+"What is the overall system summary?"
+"Which sensor has the most readings?"
+"What data is available for the nmeter temperature sensor?"
+
+================================================================================
+
+
+
+
