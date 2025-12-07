@@ -3,10 +3,22 @@ from sqlalchemy import create_engine, text, inspect
 from datetime import datetime
 import os
 import sys
+import logging
 
-# Add current directory to path for config import
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from config import PipelineConfig
+# Add parent directory to path for imports
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+from config.config import PipelineConfig
+
+# Import Kafka producer
+try:
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+    from streaming.kafka_producer import BiosphereKafkaProducer
+    KAFKA_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Kafka producer not available: {e}")
+    KAFKA_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 # Create MySQL connection
 def create_mysql_connection():
@@ -20,6 +32,16 @@ def create_categories_table():
     
     # Create database connection
     engine = create_mysql_connection()
+    
+    # Initialize Kafka producer if enabled
+    kafka_producer = None
+    if KAFKA_AVAILABLE and PipelineConfig.KAFKA_ENABLE_PRODUCER:
+        try:
+            kafka_producer = BiosphereKafkaProducer()
+            print("✅ Kafka producer initialized")
+        except Exception as e:
+            print(f"⚠️  Warning: Could not initialize Kafka producer: {e}")
+            print("   Continuing without Kafka publishing...")
     
     # Read the table configuration CSV
     df = pd.read_csv(PipelineConfig.ROW_COUNT_CSV)
@@ -132,8 +154,32 @@ def create_categories_table():
                 print(f"Saved joined data to database table: {table_name}")
             except Exception as e:
                 print(f"Error saving to database: {str(e)}")
+            
+            # 🆕 NEW: Publish to Kafka
+            if kafka_producer:
+                try:
+                    print(f"\n📤 Publishing to Kafka topic for category '{ids}'...")
+                    result = kafka_producer.publish_cleaned_data(
+                        category=ids,
+                        data=joined_data,
+                        metadata={
+                            "table_count": len(table_names),
+                            "source_tables": table_names,
+                            "csv_file": output_filename,
+                            "db_table": table_name
+                        }
+                    )
+                    print(f"   ✅ Kafka publish complete: {result['success']} success, {result['failed']} failed")
+                except Exception as e:
+                    print(f"   ⚠️  Warning: Kafka publish failed: {e}")
+                    print(f"   Continuing with pipeline...")
         else:
             print(f"No data to save for ID {ids}")
+    
+    # Close Kafka producer
+    if kafka_producer:
+        kafka_producer.close()
+        print("\n🔒 Kafka producer closed")
 
 if __name__ == "__main__":
     create_categories_table()

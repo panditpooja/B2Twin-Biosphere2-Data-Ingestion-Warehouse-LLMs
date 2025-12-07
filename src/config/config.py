@@ -45,6 +45,42 @@ class PipelineConfig:
     LOG_LEVEL = "INFO"
     LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
     
+    # Kafka configurations
+    KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    KAFKA_TOPIC_PREFIX = "biosphere.rainforest"
+    KAFKA_CONSUMER_GROUP_PREFIX = "biosphere_consumer"
+    
+    # Kafka topic names by category
+    KAFKA_TOPICS = {
+        'type1': f"{KAFKA_TOPIC_PREFIX}.type1",
+        'type2': f"{KAFKA_TOPIC_PREFIX}.type2",
+        'less50': f"{KAFKA_TOPIC_PREFIX}.less50",
+        'between50and100': f"{KAFKA_TOPIC_PREFIX}.between50and100",
+        'other': f"{KAFKA_TOPIC_PREFIX}.other"
+    }
+    
+    # Kafka producer settings
+    KAFKA_PRODUCER_CONFIG = {
+        'acks': 'all',  # Wait for all replicas to acknowledge
+        'retries': 3,
+        'max_in_flight_requests_per_connection': 5,
+        'compression_type': 'gzip',
+        'linger_ms': 10,  # Batch messages for 10ms
+        'batch_size': 16384,  # 16KB batches
+    }
+    
+    # Kafka consumer settings
+    KAFKA_CONSUMER_CONFIG = {
+        'auto_offset_reset': 'earliest',  # Start from beginning if no offset
+        'enable_auto_commit': False,  # Manual commit for reliability
+        'max_poll_records': 500,
+        'session_timeout_ms': 30000,
+    }
+    
+    # Event bus settings
+    KAFKA_ENABLE_PRODUCER = True  # Enable Kafka publishing
+    KAFKA_ENABLE_CONSUMERS = True  # Enable Kafka consumers
+    
     @classmethod
     def get_mysql_connection_string(cls):
         """Get MySQL connection string"""
