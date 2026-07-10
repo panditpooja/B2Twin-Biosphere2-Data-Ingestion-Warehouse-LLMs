@@ -438,5 +438,8 @@ This is a capstone project. For questions or issues, please refer to the project
 - Python open-source community
 
 ---
+> **📌 Note on branches:** This `ETL` branch contains the Oracle-to-SQLite-to-FastAPI data warehouse pipeline. The real-time Kafka/Spark streaming ingestion and the LangChain RAG chatbot (natural-language querying over live sensor data) live on two other branches in this repo:
+> - [`kafka_integration`](https://github.com/panditpooja/B2Twin-Biosphere2-Data-Ingestion-Warehouse-LLMs/tree/kafka_integration) — Kafka + Spark streaming ingestion pipeline
+> - [`rag-web-app`](https://github.com/panditpooja/B2Twin-Biosphere2-Data-Ingestion-Warehouse-LLMs/tree/rag-web-app) — RAG chatbot with LLM-powered natural-language querying over sensor data
 
 **Note**: This project processes real environmental sensor data from Biosphere 2. Ensure proper credentials and permissions before accessing production databases.
